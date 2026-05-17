@@ -1,0 +1,67 @@
+services:
+  # ── MySQL ──────────────────────────────────────────────────────────────────
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
+      MYSQL_DATABASE: trello_clone
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "--silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - app
+
+  # ── Schema migration (runs once, exits) ────────────────────────────────────
+  migrate:
+    build:
+      context: .
+      target: prisma          # reuses the lean prisma stage — no full Next.js build
+    command: npx prisma db push
+    environment:
+      DATABASE_URL: mysql://root:${MYSQL_ROOT_PASSWORD:-changeme}@db:3306/trello_clone
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app
+
+  # ── Next.js application ────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      target: runner
+      args:
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
+        NEXT_PUBLIC_CLERK_SIGN_IN_URL: ${NEXT_PUBLIC_CLERK_SIGN_IN_URL:-/sign-in}
+        NEXT_PUBLIC_CLERK_SIGN_UP_URL: ${NEXT_PUBLIC_CLERK_SIGN_UP_URL:-/sign-up}
+        NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL: ${NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL:-/}
+        NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL: ${NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL:-/}
+        NEXT_PUBLIC_UNSPLASH_ACCESS_KEY: ${NEXT_PUBLIC_UNSPLASH_ACCESS_KEY}
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      # Override DATABASE_URL to point at the compose db service
+      DATABASE_URL: mysql://root:${MYSQL_ROOT_PASSWORD:-changeme}@db:3306/trello_clone
+      NODE_ENV: production
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - app
+
+networks:
+  app:
+    driver: bridge
+
+volumes:
+  mysql_data:
